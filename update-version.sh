@@ -2,7 +2,7 @@
 
 #Ensure that the local repository is up to date with the one on github.com
 
-git pull origin master
+git pull origin main
 
 # Save the current date and time in a file called version
 
@@ -18,4 +18,4 @@ git commit -m "Update version"
 
 # Push the changes to the remote repository
 
-git push origin master
+git push origin main
