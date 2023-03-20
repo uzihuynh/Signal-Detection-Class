@@ -49,24 +49,23 @@ import scipy as spi
 import matplotlib.pyplot as plt
 
 class SignalDetection:
-    
     def __init__(self, hits, misses, false_alarms, correct_rejections):
         self.hits = hits
         self.misses = misses
         self.false_alarms = false_alarms
         self.correct_rejections = correct_rejections
     
-    def H(self):
+    def hit_rate(self):
         return (self.hits / (self.hits + self.misses))
 
-    def FA(self):
+    def false_alarm_rate(self):
         return (self.false_alarms / (self.false_alarms + self.correct_rejections))
 
     def d_prime(self):
-        return (spi.stats.norm.ppf(self.H()) - spi.stats.norm.ppf(self.FA()))
+        return (spi.stats.norm.ppf(self.hit_rate()) - spi.stats.norm.ppf(self.false_alarm_rate()))
 
     def criterion(self):
-        return ((-0.5) * (spi.stats.norm.ppf(self.H()) + spi.stats.norm.ppf(self.FA())))
+        return -0.5 * (spi.stats.norm.ppf(self.hit_rate()) + spi.stats.norm.ppf(self.false_alarm_rate()))
     
     def __add__(self, other):
         return SignalDetection(self.hits + other.hits, self.misses + other.misses, self.false_alarms + other.false_alarms, self.correct_rejections + other.correct_rejections)
@@ -74,19 +73,24 @@ class SignalDetection:
     def __mul__(self, scalar):
         return SignalDetection(self.hits * scalar, self.misses * scalar, self.false_alarms * scalar, self.correct_rejections * scalar)
     
-    @staticmethod
+    @staticmethod 
     def simulate(dprime, criteriaList, signalCount, noiseCount):
-      sdtList = []
-      for i in range(len(criteriaList)):
-          k = criteriaList[i] + (dprime/2)
-          hits, falseAlarms = np.random.binomial(n=[signalCount, noiseCount], p=[1 - spi.stats.norm.cdf(k - dprime),1 - spi.stats.norm.cdf(k)])
-          misses, correctRejections = signalCount - hits, noiseCount - falseAlarms
-          sdtList.append(SignalDetection(hits, misses, falseAlarms, correctRejections))
-      
-      return sdtList
-
+        sdtList = []
+        for i in range(len(criteriaList)):
+            criterion = criteriaList[i]
+            k = criterion + (dprime/2)
+            hit_rate = 1 - spi.stats.norm.cdf(k - dprime)
+            false_alarm_rate = 1 - spi.stats.norm.cdf(k)
+            hits = np.random.binomial(signalCount, hit_rate)
+            misses = signalCount - hits
+            false_alarms = np.random.binomial(noiseCount, false_alarm_rate)
+            correct_rejections = noiseCount - false_alarms
+            sdtList.append(SignalDetection(hits, misses, false_alarms, correct_rejections))
+        return sdtList
+    
     @staticmethod
     def plot_roc(sdtList):
+        plt.figure()
         plt.xlim([0,1])
         plt.ylim([0,1])
         plt.xlabel("False Alarm Rate")
@@ -94,32 +98,21 @@ class SignalDetection:
         plt.title("Receiver Operating Characteristic Curve")
         if isinstance(sdtList, list):
             for i in range(len(sdtList)):
-                s = sdtList[i]
-                plt.plot(s.FA(), s.H(), 'o', color = 'black', markersize = 10)
-        else:
-            plt.plot(sdtList.FA(), sdtList.H(), 'o', color = 'black', markersize = 10)
+                sdt = sdtList[i]
+                plt.plot(sdt.false_alarm_rate(), sdt.hit_rate(), 'o', color = 'black')
         x, y = np.linspace(0,1,100), np.linspace(0,1,100)
         plt.plot(x,y, '--', color = 'black')
         plt.grid()
 
-    def plot_sdt(self):
-        noise_x = np.arange(-4, 4, 0.1)
-        noise_y = spi.stats.norm.pdf(noise_x, 0, 1)
-        signal_x = np.arange(-4, 4, 0.1)
-        signal_y = spi.stats.norm.pdf(noise_x, self.d_prime(), 1)
-        plt.plot(noise_x, noise_y, label = "Noise", color = 'blue')
-        plt.plot(signal_x, signal_y, label = "Signal", color = 'green')
-        plt.axvline(x = ((self.d_prime() / 2) + self.criterion()), label = "k", color = 'r', linestyle = '--')
-        x_distance = [0, self.d_prime()]
-        y_distance = [0.4, 0.4]
-        plt.plot(x_distance, y_distance, '--', label = "Distance", color = 'black')
-        plt.plot(0,0, 'o', label = '0', color = 'blue')
-        plt.plot(self.d_prime(), 0, 'o', label = 'D\'', color = 'green')
-        plt.title("Signal Detection Theory Curve")
-        plt.xlabel("Response")
-        plt.ylabel("Probability")
-        plt.legend()
-        plt.show()
+    def plot_sdt(self, d_prime):
+        x = np.linspace(-4, 4, 1000)
+        y_N = spi.stats.norm.pdf(x, loc = 0, scale = 1) 
+        y_S = spi.stats.norm.pdf(x, loc = d_prime, scale = 1) 
+        c = d_prime/2 #optimal threshold
+        Ntop_y = np.max(y_N)
+        Nstop_x = x[np.argmax(y_N)]
+        Stop_y = np.max(y_S)
+        Stop_x = x[np.argmax(y_S)]
 
     def nLogLikelihood(self, hit_rate, false_alarm_rate):
         return -((self.hits * np.log(hit_rate)) + (self.misses * np.log(1-hit_rate)) + (self.false_alarms * np.log(false_alarm_rate)) + (self.correct_rejections * np.log(1-false_alarm_rate)))
@@ -132,22 +125,22 @@ class SignalDetection:
     def fit_roc(sdtList):
         SignalDetection.plot_roc(sdtList)
         a = 0
-        minimize = spi.optimize.minimize(fun = SignalDetection.rocLoss, x0 = a, method = 'nelder-mead', args = (sdtList))
-        losscurve = []
+        lossfun = spi.optimize.minimize(fun = SignalDetection.rocLoss, x0 = a, method = 'BFGS', args = (sdtList,))
+        loss = []
         for i in range(0,100,1):
-          losscurve.append((SignalDetection.rocCurve(i/100, float(minimize.x))))
-        plt.plot(np.linspace(0,1,100), losscurve, '-', color='red')
-        aHat = minimize.x
+            loss.append((SignalDetection.rocCurve(i/100, float(lossfun.x))))
+        plt.plot(np.linspace(0,1,100), loss, '-', color = 'r')
+        aHat = lossfun.x
         return float(aHat)
-
+    
     @staticmethod
     def rocLoss(a, sdtList):
-        L = []
+        total_loss = []
         for i in range(len(sdtList)):
-            s = sdtList[i]
-            predicted_hit_rate = s.rocCurve(s.FA(), a)
-            L.append(s.nLogLikelihood(predicted_hit_rate, s.FA()))
-        return sum(L)
+            sdt = sdtList[i]
+            predicted_hit_rate = sdt.rocCurve(sdt.false_alarm_rate(), a)
+            total_loss.append(sdt.nLogLikelihood(predicted_hit_rate, sdt.false_alarm_rate()))
+        return sum(total_loss)
 
 import scipy.stats
 import numpy as np
