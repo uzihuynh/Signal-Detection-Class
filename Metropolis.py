@@ -202,7 +202,7 @@ class TestSignalDetection(unittest.TestCase):
         plt.close()
 
 if __name__ == '__main__':
-    unittest.main(argv=['ignored'], exit=False)
+    unittest.main() 
 
 import scipy.stats
 
