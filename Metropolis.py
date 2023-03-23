@@ -1,53 +1,52 @@
 import numpy as np
-import scipy.stats
-
-class Metropolis:
-    def __init__(self, logTarget, initialState):
-        self.logTarget = logTarget
-        self.currentState = initialState
-        self.sigma = 1
-        self.samples = []
-
-    def accept(self, proposal):
-        acceptance_prob = min(1, np.exp(self.logTarget(proposal) - self.logTarget(self.currentState)))
-        return np.random.uniform() < acceptance_prob
-
-    def adapt(self, blockLengths):
-        target_acceptance_rate = 0.4
-
-        for block_length in blockLengths:
-            accepted_count = 0
-
-            for _ in range(block_length):
-                proposal = np.random.normal(loc=self.currentState, scale=self.sigma)
-                if self.accept(proposal):
-                    self.currentState = proposal
-                    accepted_count += 1
-
-            acceptance_rate = accepted_count / block_length
-            self.sigma *= target_acceptance_rate / acceptance_rate
-
-        return self
-
-    def sample(self, n):
-        for _ in range(n):
-            proposal = np.random.normal(loc=self.currentState, scale=self.sigma)
-            if self.accept(proposal):
-                self.currentState = proposal
-            self.samples.append(self.currentState)
-
-        return self
-
-    def summary(self):
-        samples_np = np.array(self.samples)
-        mean = np.mean(samples_np)
-        c025, c975 = np.percentile(samples_np, [2.5, 97.5])
-
-        return {'mean': mean, 'c025': c025, 'c975': c975}
-
 import scipy as spi
 import matplotlib.pyplot as plt
 
+class Metropolis: 
+    def __init__(self, logTarget, initialState, stepSize=1.0):
+        self.logTarget = logTarget
+        self.state = initialState
+        self.samples = []
+        self.stepSize = stepSize
+    
+    def _accept(self, proposal):
+        acceptance_prob = min(0, (self.logTarget(proposal) - self.logTarget(self.state)))
+        if np.log(np.random.uniform()) < acceptance_prob:
+            self.state = proposal
+            return True
+        return False
+    
+    def adapt(self, blockLengths):
+        for k in blockLengths:
+            accepted = 0
+            proposals = 0
+            for n in range(k):
+                proposal = np.random.normal(self.state, self.stepSize)
+                if self._accept(proposal):
+                    accepted += 1
+                proposals += 1
+            acceptance_prob = accepted / proposals
+            if acceptance_prob > 0.5:
+                self.stepSize *= 1.1
+            else:
+                self.stepSize *= 0.9
+        return self
+
+    def sample(self, nSamples):
+        for n in range(nSamples):
+            proposal = np.random.normal(loc=self.state, scale=self.stepSize)
+            self._accept(proposal)
+            self.samples.append(self.state)
+        return self
+
+    def summary(self):
+        n = len(self.samples)
+        mean = np.mean(self.samples)
+        std = np.std(self.samples, ddof = 1)
+        c025 = np.percentile(self.samples, 2.5)
+        c975 = np.percentile(self.samples, 97.5)
+        return {'mean': mean, 'std': std, 'c025': c025, 'c975': c975}
+    
 class SignalDetection:
     def __init__(self, hits, misses, false_alarms, correct_rejections):
         self.hits = hits
@@ -90,7 +89,6 @@ class SignalDetection:
     
     @staticmethod
     def plot_roc(sdtList):
-        plt.figure()
         plt.xlim([0,1])
         plt.ylim([0,1])
         plt.xlabel("False Alarm Rate")
@@ -141,10 +139,72 @@ class SignalDetection:
             predicted_hit_rate = sdt.rocCurve(sdt.false_alarm_rate(), a)
             total_loss.append(sdt.nLogLikelihood(predicted_hit_rate, sdt.false_alarm_rate()))
         return sum(total_loss)
+    
+import unittest
+
+class TestSignalDetection(unittest.TestCase):
+    def test_simulate(self):
+        # Test with a single criterion value
+        dPrime       = 1.5
+        criteriaList = [0]
+        signalCount  = 1000
+        noiseCount   = 1000
+
+        sdtList      = SignalDetection.simulate(dPrime, criteriaList, signalCount, noiseCount)
+        self.assertEqual(len(sdtList), 1)
+        sdt = sdtList[0]
+
+        self.assertEqual(sdt.hits             , sdtList[0].hits)
+        self.assertEqual(sdt.misses           , sdtList[0].misses)
+        self.assertEqual(sdt.false_alarms      , sdtList[0].false_alarms)
+        self.assertEqual(sdt.correct_rejections, sdtList[0].correct_rejections)
+
+        # Test with multiple criterion values
+        dPrime       = 1.5
+        criteriaList = [-0.5, 0, 0.5]
+        signalCount  = 1000
+        noiseCount   = 1000
+        sdtList      = SignalDetection.simulate(dPrime, criteriaList, signalCount, noiseCount)
+        self.assertEqual(len(sdtList), 3)
+        for sdt in sdtList:
+            self.assertLessEqual    (sdt.hits              ,  signalCount)
+            self.assertLessEqual    (sdt.misses            ,  signalCount)
+            self.assertLessEqual    (sdt.false_alarms       ,  noiseCount)
+            self.assertLessEqual    (sdt.correct_rejections ,  noiseCount)
+
+    def test_nLogLikelihood(self):
+        sdt = SignalDetection(10, 5, 3, 12)
+        hit_rate = 0.5
+        false_alarm_rate = 0.2
+        expected_nll = - (10 * np.log(hit_rate) +
+                           5 * np.log(1-hit_rate) +
+                           3 * np.log(false_alarm_rate) +
+                          12 * np.log(1-false_alarm_rate))
+        self.assertAlmostEqual(sdt.nLogLikelihood(hit_rate, false_alarm_rate),
+                               expected_nll, places=6)
+
+    def test_rocLoss(self):
+        sdtList = [
+            SignalDetection( 8, 2, 1, 9),
+            SignalDetection(14, 1, 2, 8),
+            SignalDetection(10, 3, 1, 9),
+            SignalDetection(11, 2, 2, 8),
+        ]
+        a = 0
+        expected = 99.3884206555698
+        self.assertAlmostEqual(SignalDetection.rocLoss(a, sdtList), expected, places=4)
+
+    def test_integration(self):
+        dPrime = 1
+        sdtList = SignalDetection.simulate(dPrime, [-1, 0, 1], 1e7, 1e7)
+        aHat = SignalDetection.fit_roc(sdtList)
+        self.assertAlmostEqual(aHat, dPrime, places=2)
+        plt.close()
+
+if __name__ == '__main__':
+    unittest.main(argv=['ignored'], exit=False)
 
 import scipy.stats
-import numpy as np
-import matplotlib.pyplot as plt
 
 def fit_roc_bayesian(sdtList):
 
